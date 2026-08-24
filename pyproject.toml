@@ -1,0 +1,26 @@
+[project]
+name = "kb"
+version = "0.1.0"
+description = "kb — agent knowledge base (kb-io v1): local-first single-file SQLite KB with an agent-tool CLI contract"
+readme = "README.md"
+authors = [
+    { name = "Joshua", email = "joshuadcchung@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.4.2",
+    "sqlite-vec>=0.1.9",
+    "typer>=0.27.1",
+]
+
+[project.scripts]
+kb = "kb.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.25,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
