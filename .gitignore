@@ -9,6 +9,9 @@ data/
 .pytest_cache/
 .ruff_cache/
 
+# Secrets — NEVER commit real keys
+.env
+
 # OS
 .DS_Store
 Thumbs.db

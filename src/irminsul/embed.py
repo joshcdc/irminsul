@@ -79,7 +79,8 @@ class VoyageEmbedder:
         )
         r.raise_for_status()
         data = r.json()
-        results = sorted(data["results"], key=lambda d: d["index"])
+        # Voyage rerank is OpenAI-schema-shaped: {"object":"list","data":[{index, relevance_score}]}
+        results = sorted(data["data"], key=lambda d: d["index"])
         return [d["relevance_score"] for d in results]
 
 

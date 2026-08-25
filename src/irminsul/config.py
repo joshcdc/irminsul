@@ -15,6 +15,24 @@ from pathlib import Path
 
 APP_DIR_NAME = ".irminsul"
 
+# Dev-only .env injection: load KEY=VALUE pairs from <repo>/.env into the env
+# plane BEFORE any resolve() call. Never overrides an already-set var (shell /
+# CI wins). Keep deps thin: tiny parser, no python-dotenv dependency.
+def load_dotenv(path: str | None = None) -> bool:
+    p = Path(path) if path else Path.cwd() / ".env"
+    if not p.exists():
+        return False
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+    return True
+
+
+load_dotenv()
+
 DEFAULTS: "dict[str, object]" = {
     "repo.path": None,  # required — human vault root (export/import/Obsidian)
     "db.path": "~/.irminsul/irminsul.db",  # the SQLite store (kept outside the vault, gbrain-style)
