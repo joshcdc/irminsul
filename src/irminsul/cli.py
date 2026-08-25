@@ -536,7 +536,7 @@ def _specs() -> dict:
     codes = {"0": "ok", "1": "user error", "2": "infra error"}
     return {
         "init": {"args": ["--dir PATH (required)", "--json"],
-                 "output": {"ok": True, "repo_path": "str", "db_path": "str", "schema_version": 1,
+                 "output": {"ok": True, "repo_path": "str", "db_path": "str", "schema_version": 2,
                             "config": "path", "dirs_created": ["str"], "git": "str"},
                  "exit_codes": codes, "status": "implemented", "rootless": False},
         "doctor": {"args": ["--json"],

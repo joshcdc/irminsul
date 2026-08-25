@@ -56,8 +56,8 @@ def test_migrate_idempotent(tmp_path):
     # re-run migrate = no-op, no error
     assert db.migrate(conn) == db.SCHEMA_VERSION
     meta = {r["k"]: r["v"] for r in conn.execute("SELECT k, v FROM meta")}
-    assert meta["schema_version"] == "1"
-    assert meta["embed_model"] == "zembed-1"
+    assert meta["schema_version"] == "2"
+    assert meta["embed_model"] == "voyage-4-large"
     conn.close()
 
 

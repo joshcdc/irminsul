@@ -210,13 +210,13 @@ def test_backup_recover(tmp_path):
     snap = Path(bk["snapshot"])
     assert snap.exists()
 
-    # doctor ok = structural integrity only: a populated store with no
-    # embeddings/FTS index is incomplete, not broken — ok stays True and the
-    # staleness is surfaced as informational counts for the agent.
+    # FTS triggers make keyword search live, and it must survive re-put
+    # (chunk delete+insert round-trips the trigger trio).
+    _cli(["put", "concepts/snap", "--json"], home, input="ORIGINAL")
     d = json.loads(_cli(["doctor", "--json"], home).stdout)
     assert d["ok"] is True
-    assert d["checks"]["stale_embeds"] >= 1  # chunks exist, no embeddings yet
-    assert d["checks"]["stale_fts"] >= 1     # chunks exist, fts index empty
+    assert d["checks"]["stale_fts"] == 0
+    assert d["checks"]["stale_embeds"] >= 1  # embeddings pending -> informational
 
     _cli(["put", "concepts/snap", "--json"], home, input="CHANGED")
     assert "CHANGED" in json.loads(_cli(["get", "concepts/snap", "--json"], home).stdout)["content"]

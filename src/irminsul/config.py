@@ -26,11 +26,16 @@ DEFAULTS: "dict[str, object]" = {
     ],  # content namespaces only; admin/handoffs are disk-only zones
     "chunk.size": 600,
     "chunk.overlap": 60,
+    "embed.provider": "voyage",  # voyage | fake (tests/offline). Swap = config change, not code.
+    "embed.model": "voyage-4-large",
+    "embed.dim": 1024,           # vec0 float[?] schema-sizing: must match chunk_embeddings
+    "embed.api_base": "https://api.voyageai.com",
     "search.limit": 5,
     "search.rrf_k": 60,
     "search.w_fs": 1.0,
     "search.w_vec": 1.0,
     "search.rerank": True,
+    "search.reranker.model": "rerank-2.5",
     "lifecycle.soft_delete_hours": 72,
 }
 

@@ -10,7 +10,7 @@ network surface in v1 beyond the ZeroEntropy embedder).
 ## Quick start
 ```
 uv run irminsul init --dir <vault-root>      # create store + config + scaffold
-uv run irminsul doctor --json                # health check (schema v1, fts5+vec0)
+uv run irminsul doctor --json                # health check (schema v2, fts5+vec0)
 uv run irminsul help --json                  # rootless, self-describing contract
 ```
 
