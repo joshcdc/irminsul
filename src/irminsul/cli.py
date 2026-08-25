@@ -79,10 +79,12 @@ def _store() -> sqlite3.Connection:
     if not Path(db_path).exists():
         raise UsageError(f"no store at {db_path} — run `irminsul init --dir <root>` first")
     conn = db.connect(db_path)
-    # Loading vec0 is required for ANY statement touching `chunk_embeddings`
-    # (a vec0 virtual table — e.g. the DELETE on re-chunk). Best-effort: safe
-    # for commands that never touch it; vec0-dependent ops fail loudly if missing.
+    # Load vec0 BEFORE migrate: migration deltas DROP/CREATE vec0 virtual
+    # tables, which needs the extension registered first. Then auto-upgrade
+    # the schema in case the file predates the code — idempotent no-op when
+    # the store is already current.
     db.load_vec(conn)
+    db.migrate(conn)
     return conn
 
 
