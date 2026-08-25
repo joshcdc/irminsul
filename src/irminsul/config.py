@@ -1,10 +1,10 @@
-"""~/.kb/config.toml bootstrap config — the pointer that lives OUTSIDE the DB.
+"""~/.irminsul/config.toml bootstrap config — the pointer that lives OUTSIDE the DB.
 
 Why a file, not a DB row: every command's first step is resolving the store,
 and the pointer must terminate outside the DB (a pointer stored inside the
 thing it points at is circular).
 
-Resolution order everywhere: CLI flag > env var (KB_<KEY>) > config file > built-in default.
+Resolution order everywhere: CLI flag > env var (IRMINSUL_<KEY>) > config file > built-in default.
 """
 
 from __future__ import annotations
@@ -13,12 +13,12 @@ import os
 import tomllib
 from pathlib import Path
 
-APP_DIR_NAME = ".kb"
+APP_DIR_NAME = ".irminsul"
 
 DEFAULTS: "dict[str, object]" = {
     "repo.path": None,  # required — human vault root (export/import/Obsidian)
-    "db.path": "~/.kb/kb.db",  # the SQLite store (kept outside the vault, gbrain-style)
-    "backup.dir": "~/.kb/backups",
+    "db.path": "~/.irminsul/irminsul.db",  # the SQLite store (kept outside the vault, gbrain-style)
+    "backup.dir": "~/.irminsul/backups",
     "backup.keep": 10,
     "namespace.allow": [
         "archive", "companies", "concepts", "ideas", "inbox", "meetings",
@@ -64,7 +64,7 @@ def read() -> dict:
 
 
 def resolve(key, cli_value=None, use_env=True):
-    """CLI flag > env (KB_<KEY>) > config file > built-in default."""
+    """CLI flag > env (IRMINSUL_<KEY>) > config file > built-in default."""
     if cli_value is not None:
         return _expand_if_path(key, cli_value)
     if use_env:
@@ -86,7 +86,7 @@ def resolve_all(repo=None) -> dict:
 
 
 def env_name(key: str) -> str:
-    return "KB_" + key.upper().replace(".", "_").replace("-", "_")
+    return "IRMINSUL_" + key.upper().replace(".", "_").replace("-", "_")
 
 
 def coerce(value, default, key=None):

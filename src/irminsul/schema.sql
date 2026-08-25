@@ -37,5 +37,5 @@ create table links (src_chunk_id integer, dst_slug text, kind text default 'wiki
 -- tags
 create table tags (page_id integer references pages(id), tag text);
 
--- meta: RUNTIME FACTS ONLY (schema_version, embed_model) — user knobs live in ~/.kb/config.toml
+-- meta: RUNTIME FACTS ONLY (schema_version, embed_model) — user knobs live in ~/.irminsul/config.toml
 create table meta (k text primary key, v text);

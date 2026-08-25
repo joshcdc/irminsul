@@ -1,7 +1,7 @@
 [project]
-name = "kb"
+name = "irminsul"
 version = "0.1.0"
-description = "kb — agent knowledge base (kb-io v1): local-first single-file SQLite KB with an agent-tool CLI contract"
+description = "Irminsul — agent knowledge base (ims-io v1): local-first single-file SQLite store with an agent-tool CLI contract"
 readme = "README.md"
 authors = [
     { name = "Joshua", email = "joshuadcchung@gmail.com" }
@@ -14,7 +14,8 @@ dependencies = [
 ]
 
 [project.scripts]
-kb = "kb.cli:main"
+irminsul = "irminsul.cli:main"   # canonical command
+ims = "irminsul.cli:main"        # alias (same entry point)
 
 [build-system]
 requires = ["uv_build>=0.11.25,<0.12.0"]
