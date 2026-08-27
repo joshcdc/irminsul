@@ -156,6 +156,7 @@ def _cli(args, home, input=None, extra_env=None):
     env = dict(os.environ)
     env["HOME"] = str(home)
     env["USERPROFILE"] = str(home)
+    env.setdefault("IRMINSUL_EMBED_PROVIDER", "fake")  # CLI tests run offline
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -227,8 +228,8 @@ def test_embed_stale_heals_and_is_idempotent(tmp_path):
     root = tmp_path / "vault"
     r = _cli(["init", "--dir", str(root), "--json"], home, extra_env=env)
     assert r.returncode == 0, r.stderr
-    # put does NOT embed yet (embed-on-write is a separate Phase 2 slice)
-    r = _cli(["put", "projects/foo", "--json"], home, input="cat facts here", extra_env=env)
+    # put --no-embed leaves fresh chunks stale (embed-on-write is the default)
+    r = _cli(["put", "projects/foo", "--no-embed", "--json"], home, input="cat facts here", extra_env=env)
     assert r.returncode == 0, r.stderr
     assert json.loads(_cli(["doctor", "--json"], home, extra_env=env).stdout)["checks"]["stale_embeds"] >= 1
 
@@ -244,3 +245,58 @@ def test_embed_stale_heals_and_is_idempotent(tmp_path):
     # idempotent: nothing left stale
     out2 = json.loads(_cli(["embed", "--stale", "--json"], home, extra_env=env).stdout)
     assert out2["embedded"] == 0
+
+
+# ------------------------------------------------------------------ Phase 2: put embed-on-write + search
+
+def test_put_embed_on_write_default_and_no_embed(tmp_path):
+    env = {"IRMINSUL_EMBED_PROVIDER": "fake"}
+    home = tmp_path / "h"
+    root = tmp_path / "vault"
+    assert _cli(["init", "--dir", str(root), "--json"], home, extra_env=env).returncode == 0
+    # default: put embeds its fresh chunks
+    r = _cli(["put", "projects/a", "--json"], home, input="auto embedded here", extra_env=env)
+    out = json.loads(r.stdout)
+    assert out["embedded"] >= 1 and "embed_error" not in out
+    assert json.loads(_cli(["doctor", "--json"], home, extra_env=env).stdout)["checks"]["stale_embeds"] == 0
+    # --no-embed leaves chunks stale for the repair verb
+    _cli(["put", "projects/b", "--no-embed", "--json"], home, input="stale chunk here", extra_env=env)
+    outb = json.loads(_cli(["put", "projects/b", "--no-embed", "--json"], home,
+                           input="stale chunk here", extra_env=env).stdout)
+    assert outb.get("no_embed") is True
+    assert json.loads(_cli(["doctor", "--json"], home, extra_env=env).stdout)["checks"]["stale_embeds"] >= 1
+
+
+def test_search_hybrid_and_excludes_deleted(tmp_path):
+    env = {"IRMINSUL_EMBED_PROVIDER": "fake"}
+    home = tmp_path / "h"
+    root = tmp_path / "vault"
+    assert _cli(["init", "--dir", str(root), "--json"], home, extra_env=env).returncode == 0
+    _cli(["put", "concepts/cats", "--json"], home, input="cats meow and purr loudly in the kitchen", extra_env=env)
+    _cli(["put", "concepts/dogs", "--json"], home, input="dogs bark and wag tails in the park", extra_env=env)
+    out = json.loads(_cli(["search", "meow cats", "--k", "3", "--json"], home, extra_env=env).stdout)
+    assert out["ok"] is True and out["count"] >= 1
+    slugs = {res["slug"] for res in out["results"]}
+    assert "concepts/cats" in slugs
+    assert all({"slug", "score", "excerpt", "chunk_id"} <= set(res) for res in out["results"])
+    # soft-delete a matching page -> must vanish from search
+    _cli(["delete", "concepts/cats", "--json"], home, extra_env=env)
+    out2 = json.loads(_cli(["search", "meow cats", "--k", "3", "--json"], home, extra_env=env).stdout)
+    assert "concepts/cats" not in {res["slug"] for res in out2["results"]}
+
+
+def test_search_keyword_only_without_embeddings(tmp_path):
+    home = tmp_path / "h"
+    root = tmp_path / "vault"
+    assert _cli(["init", "--dir", str(root), "--json"], home).returncode == 0
+    # no vectors at all (--no-embed, nothing ever embedded) -> FTS leg only, no crash
+    _cli(["put", "concepts/kw", "--no-embed", "--json"], home, input="needle in the haystack here")
+    out = json.loads(_cli(["search", "needle haystack", "--k", "3", "--json"], home).stdout)
+    assert out["count"] >= 1 and out["results"][0]["slug"] == "concepts/kw"
+
+
+def test_search_k_cap_enforced(tmp_path):
+    home = tmp_path / "h"
+    home.mkdir(parents=True)
+    r = _cli(["search", "x", "--k", "25", "--json"], home)
+    assert r.returncode == 1  # typer min/max -> user error exit

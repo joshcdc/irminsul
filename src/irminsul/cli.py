@@ -22,12 +22,19 @@ from . import config as cfg
 from . import db
 from . import io as kbio
 from . import pages
+from . import search as kbsearch
 from . import vectors
 from .embed import get_embedder
 
 app = typer.Typer(no_args_is_help=True, help="irminsul — agent knowledge base (irminsul-io v1).")
 
 EXIT_OK, EXIT_USER, EXIT_INFRA = 0, 1, 2
+# click/typer raise UsageError for bad CLI input — its default exit code is 2
+# (click's standard), which collides with our "infra error" reservation.
+# Realign user-input failures to the contract's user-error code 1. typer
+# vendors its own exception aliases (typer._click.exceptions), so patch both.
+click.exceptions.UsageError.exit_code = EXIT_USER
+typer._click.exceptions.UsageError.exit_code = EXIT_USER
 CONTRACT_VERSION = "v1"
 
 SCAFFOLD_DIRS = [
@@ -88,6 +95,29 @@ def _store() -> sqlite3.Connection:
     db.load_vec(conn)
     db.migrate(conn)
     return conn
+
+
+def _make_embedder():
+    """Configured embedder (embed.provider/model/dim + search.reranker.model)."""
+    return get_embedder(
+        cfg.resolve("embed.provider"),
+        model=cfg.resolve("embed.model"),
+        dim=int(cfg.resolve("embed.dim")),
+        rerank_model=cfg.resolve("search.reranker.model"),
+    )
+
+
+def _embed_ids(conn, emb, chunk_ids, model: str) -> int:
+    """Batch-embed the given chunk ids via the provider and stamp the tag."""
+    if not chunk_ids:
+        return 0
+    texts = [r["chunk_text"] for r in conn.execute(
+        f"SELECT chunk_text FROM chunks WHERE id IN ({','.join('?' * len(chunk_ids))})"
+        " ORDER BY id", chunk_ids)]
+    vecs = []
+    for i in range(0, len(texts), 64):  # batch network calls
+        vecs.extend(emb.embed(texts[i:i + 64], input_type="document"))
+    return vectors.add_embeddings(conn, chunk_ids, vecs, model)
 
 
 def _read_input(file: Optional[Path]) -> str:
@@ -184,15 +214,15 @@ def doctor(
             ).fetchone()[0]
             if _table_exists(conn, "chunks") and _table_exists(conn, "chunk_embeddings"):
                 checks["stale_embeds"] = conn.execute(
-                    "SELECT count(*) FROM chunks c LEFT JOIN chunk_embeddings e"
-                    " ON e.chunk_id = c.id WHERE e.chunk_id IS NULL"
+                    "SELECT count(*) FROM chunks c JOIN pages p ON p.id = c.page_id"
+                    " LEFT JOIN chunk_embeddings e ON e.chunk_id = c.id"
+                    " WHERE p.deleted_at IS NULL AND e.chunk_id IS NULL"
                 ).fetchone()[0]
             else:
                 checks["stale_embeds"] = "n/a"
-            # FTS index is populated in Phase 2 (triggers + rebuild); until then
-            # keyword search is silently empty — surface that as a number.
-            checks["stale_fts"] = conn.execute("SELECT count(*) FROM chunks").fetchone()[0] \
-                if not _fts_in_sync(conn) else 0
+            # Readiness counts exclude soft-deleted pages — an agent shouldn't
+            # be nudged to embed/search content the owner deleted.
+            checks["stale_fts"] = _fts_stale_count(conn)
             conn.close()
         except sqlite3.Error as e:
             checks["open_error"] = str(e)
@@ -260,28 +290,46 @@ def embed(
     """Embed chunks via the configured provider (embed.provider). Bare = embed
     every chunk, ignoring tags. --stale = the repair verb: only chunks whose
     embed_model tag is NULL / no vector / ≠ configured model (covers crashed
-    batches, --no-embed puts, and model bumps). Idempotent by construction."""
+    batches, --no-embed puts, and model bumps). Idempotent by construction.
+    Soft-deleted pages are never embedded."""
     with _store() as conn:
         provider = cfg.resolve("embed.provider")
         model = cfg.resolve("embed.model")
-        dim = int(cfg.resolve("embed.dim"))
-        rr = cfg.resolve("search.reranker.model")
-        emb = get_embedder(provider, model=model, dim=dim, rerank_model=rr)
+        emb = _make_embedder()
         if stale:
             ids = vectors.stale_chunk_ids(conn, model)
         else:
             ids = [r["id"] for r in conn.execute("SELECT id FROM chunks ORDER BY id")]
-        embedded = 0
-        if ids:
-            texts = [r["chunk_text"] for r in conn.execute(
-                f"SELECT chunk_text FROM chunks WHERE id IN ({','.join('?' * len(ids))})"
-                " ORDER BY id", ids)]
-            vecs = []
-            for i in range(0, len(texts), 64):  # batch network calls
-                vecs.extend(emb.embed(texts[i:i + 64], input_type="document"))
-            embedded = vectors.add_embeddings(conn, ids, vecs, model)
+        embedded = _embed_ids(conn, emb, ids, model) if ids else 0
     emit({"ok": True, "embedded": embedded, "stale": stale,
           "provider": provider, "model": model}, as_json)
+
+
+# ---------------------------------------------------------------- command: search
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="free-text query"),
+    k: int = typer.Option(None, "--k", min=1, max=20,
+                          help="result cap (default search.limit)"),
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """Hybrid retrieval: FTS5 keyword ∪ vec0 KNN → RRF → rerank-2.5.
+    Soft-deleted pages excluded. Keyword search works even without embeddings."""
+    limit = k if k is not None else int(cfg.resolve("search.limit"))
+    try:
+        emb = _make_embedder()
+    except Exception:
+        emb = None  # embedding unavailable -> keyword-only (vector leg skipped)
+    with _store() as conn:
+        results = kbsearch.hybrid_search(
+            conn, emb, query, limit=limit,
+            rrf_k=int(cfg.resolve("search.rrf_k")),
+            w_fs=float(cfg.resolve("search.w_fs")),
+            w_vec=float(cfg.resolve("search.w_vec")),
+            rerank=bool(cfg.resolve("search.rerank")),
+        )
+    emit({"ok": True, "query": query, "count": len(results), "results": results}, as_json)
 
 
 # ---------------------------------------------------------------- command: put/get/list/stats
@@ -290,9 +338,14 @@ def embed(
 def put(
     slug: str = typer.Argument(...),
     file: Optional[Path] = typer.Option(None, "--file", help="read content from file (else stdin)"),
+    no_embed: bool = typer.Option(
+        False, "--no-embed",
+        help="skip embedding on write — fresh chunks left stale for `embed --stale`"),
     as_json: bool = typer.Option(False, "--json"),
 ):
-    """Upsert a page by slug (re-chunk; no embedding until Phase 2)."""
+    """Upsert a page by slug (re-chunk). Embeds the fresh chunks on write —
+    best-effort: a missing/misconfigured provider is REPORTED as embed_error,
+    never blocks the write (repair via `irminsul embed --stale`)."""
     content = _read_input(file)
     meta, body = kbio.parse_frontmatter(content)
     allowed = cfg.resolve("namespace.allow")
@@ -315,13 +368,26 @@ def put(
         )
         row = pages.get_page(conn, slug, include_deleted=True)
         n_chunks = conn.execute("SELECT count(*) FROM chunks WHERE page_id = ?", (page_id,)).fetchone()[0]
+        embedded = 0
+        embed_error = None
+        if not no_embed and n_chunks:
+            ids = [r["id"] for r in conn.execute("SELECT id FROM chunks WHERE page_id = ?", (page_id,))]
+            try:
+                embedded = _embed_ids(conn, _make_embedder(), ids, cfg.resolve("embed.model"))
+            except Exception as e:
+                embed_error = str(e)  # best-effort: repair via `embed --stale`
+
     out = {
         "ok": True, "slug": slug, "page_id": page_id,
         "changed": "updated" if existed else "created",
-        "chunks": n_chunks,
+        "chunks": n_chunks, "embedded": embedded,
         "type": row["type"], "title": row["title"],
         "created": row["created"], "updated": row["updated"],
     }
+    if no_embed:
+        out["no_embed"] = True
+    if embed_error:
+        out["embed_error"] = embed_error
     dropped = sorted(set(meta) - kbio.FRONTMATTER_KEYS)
     if dropped:
         out["dropped_keys"] = dropped  # report-only, never stored
@@ -599,19 +665,21 @@ def _table_exists(conn, name: str) -> bool:
     ).fetchone() is not None
 
 
-def _fts_in_sync(conn) -> bool:
-    """True when chunks_fts has indexed every chunk (Phase 2 keeps this true via
-    triggers; in Phase 1 the index is never populated -> always stale).
+def _fts_stale_count(conn) -> int:
+    """Live chunks missing from the FTS index (soft-deleted pages excluded).
 
     count(*) on an external-content FTS5 table falls through to the content
     table, so it can't detect staleness — chunks_fts_docsize holds one row per
-    INDEXED doc, which is the honest count.
+    INDEXED doc, so a LEFT JOIN on it over live chunks is the honest count.
     """
     try:
-        fts = conn.execute("SELECT count(*) FROM chunks_fts_docsize").fetchone()[0]
-        return fts == conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
+        return conn.execute(
+            "SELECT count(*) FROM chunks c JOIN pages p ON p.id = c.page_id"
+            " LEFT JOIN chunks_fts_docsize d ON d.id = c.id"
+            " WHERE p.deleted_at IS NULL AND d.id IS NULL"
+        ).fetchone()[0]
     except sqlite3.Error:
-        return False
+        return -1
 
 
 # ---------------------------------------------------------------- spec table (irminsul-io v1)
@@ -636,10 +704,12 @@ def _specs() -> dict:
                     "output": {"ok": True, "from": "int", "to": "int", "upgraded": "bool",
                                "schema_version": "int"},
                     "exit_codes": codes, "status": "implemented", "rootless": False},
-        "put": {"args": ["<slug>", "--file PATH | stdin", "--json"],
+        "put": {"args": ["<slug>", "--file PATH | stdin", "--no-embed", "--json"],
                 "output": {"ok": True, "slug": "str", "page_id": "int", "changed": "created|updated",
-                           "chunks": "int", "type": "str", "title": "str|None",
+                           "chunks": "int", "embedded": "int", "type": "str", "title": "str|None",
                            "created": "str", "updated": "str",
+                           "no_embed": "bool (when --no-embed)",
+                           "embed_error": "str (best-effort failure only)",
                            "dropped_keys": "[str] (only when non-empty; report-only)"},
                 "exit_codes": codes, "status": "implemented", "rootless": False},
         "get": {"args": ["<slug>", "--json"],
@@ -690,6 +760,11 @@ def _specs() -> dict:
                   "output": {"ok": True, "embedded": "int", "stale": "bool",
                              "provider": "str", "model": "str"},
                   "exit_codes": codes, "status": "implemented", "rootless": False},
+        "search": {"args": ["<query>", "--k N", "--json"],
+                   "output": {"ok": True, "query": "str", "count": "int",
+                              "results": [{"chunk_id": "int", "slug": "str", "title": "str|None",
+                                           "type": "str", "score": "float", "excerpt": "str"}]},
+                   "exit_codes": codes, "status": "implemented", "rootless": False},
         "graph": {"args": ["<slug>", "--depth N"], "status": "planned (Phase 3)", "rootless": False},
         "rag": {"args": ["<question>", "--k N", "--json"], "status": "planned (post-v1 Phase 4)",
                 "rootless": False},

@@ -33,7 +33,7 @@ Machine-readable specs: `irminsul help --json` · `irminsul schema <cmd> --json`
 | `help` | implemented (rootless) | `{contract, version, rootless, exit_codes, commands}` |
 | `schema <cmd>` | implemented (rootless) | one command's spec |
 | `config [key [value]]` | implemented (rootless) | `{key, value, source}` or full dump |
-| `put <slug> [--file]` | implemented | `{ok, slug, page_id, changed: created\|updated, chunks, type, title, created, updated, dropped_keys?}` — `dropped_keys` report-only when frontmatter carried unmapped keys |
+| `put <slug> [--file] [--no-embed]` | implemented | `{ok, slug, page_id, changed, chunks, embedded, type, title, created, updated, no_embed?, embed_error?, dropped_keys?}` — embeds fresh chunks on write by default (best-effort: `embed_error` reported, never blocks; `--no-embed` leaves them stale for `embed --stale`) |
 | `get <slug>` | implemented | `{slug, type, title, created, updated, deleted_at, content}` |
 | `list [--limit N] [--include-deleted]` | implemented | `{items:[{slug, type, title, updated, deleted_at}], count}` |
 | `stats` | implemented | `{ok, pages, active, deleted, chunks, tags}` |
@@ -43,7 +43,8 @@ Machine-readable specs: `irminsul help --json` · `irminsul schema <cmd> --json`
 | `recover <ts\|path> --yes` | implemented | `{ok, from, to}` |
 | `import <dir> [--dry-run]` | implemented (idempotent) | `{ok, dry_run, imported, skipped, errors:[{file, error}], dropped?}` — `dropped` report-only: files whose frontmatter carried unmapped keys |
 | `export --dir PATH` | implemented | `{ok, exported, dir}` |
-| `embed [--stale]` | implemented | `{ok, embedded, stale, provider, model}` — `--stale` = repair/batch/resume (embed only NULL/mismatched tags); bare = embed all |
+| `embed [--stale]` | implemented | `{ok, embedded, stale, provider, model}` — `--stale` = repair/batch/resume (embed only NULL/mismatched tags); bare = embed all; soft-deleted pages never embedded |
+| `search "<query>" [--k N]` | implemented | `{ok, query, count, results:[{chunk_id, slug, title, type, score, excerpt}]}` — FTS5 ∪ vec0 KNN → RRF → rerank-2.5; `--k` ≤ 20; soft-deleted excluded; keyword search works without embeddings |
 | `graph` | planned (Phase 3) | frozen at that phase |
 | `rag` | planned (post-v1 Phase 4) | `{answer, citations:[{slug, score}]}` |
 

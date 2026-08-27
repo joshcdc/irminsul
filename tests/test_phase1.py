@@ -18,6 +18,7 @@ def _cli(args, home, input=None):
     env = dict(os.environ)
     env["HOME"] = str(home)
     env["USERPROFILE"] = str(home)
+    env.setdefault("IRMINSUL_EMBED_PROVIDER", "fake")  # CLI tests run offline
     return subprocess.run(
         [sys.executable, "-m", "irminsul", *args],
         capture_output=True, text=True, env=env, input=input, cwd=str(ROOT),
@@ -206,14 +207,14 @@ def test_import_reports_bad_slug_files_and_atomic(tmp_path):
 
 def test_backup_recover(tmp_path):
     home, root = _setup(tmp_path)
-    _cli(["put", "concepts/snap", "--json"], home, input="ORIGINAL")
+    _cli(["put", "concepts/snap", "--no-embed", "--json"], home, input="ORIGINAL")
     bk = json.loads(_cli(["backup", "--keep", "2", "--json"], home).stdout)
     snap = Path(bk["snapshot"])
     assert snap.exists()
 
     # FTS triggers make keyword search live, and it must survive re-put
     # (chunk delete+insert round-trips the trigger trio).
-    _cli(["put", "concepts/snap", "--json"], home, input="ORIGINAL")
+    _cli(["put", "concepts/snap", "--no-embed", "--json"], home, input="ORIGINAL")
     d = json.loads(_cli(["doctor", "--json"], home).stdout)
     assert d["ok"] is True
     assert d["checks"]["stale_fts"] == 0

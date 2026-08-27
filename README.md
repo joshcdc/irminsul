@@ -12,7 +12,8 @@ outbound call in v1 — the Voyage embed/rerank provider).
 uv run irminsul init --dir <vault-root>      # create store + config + scaffold
 uv run irminsul doctor --json                # health check (schema v2, fts5+vec0)
 uv run irminsul doctor --fix --json          # self-heal a stale schema, then re-check
-uv run irminsul embed --stale --json         # embed missing/outdated vectors (repair; put doesn't embed yet)
+uv run irminsul embed --stale --json         # embed missing/outdated vectors (repair; put embeds by default)
+uv run irminsul search "terms to find" --k 5 --json  # hybrid retrieval (FTS5 + vectors → RRF → rerank)
 uv run irminsul migrate --json               # explicit schema upgrade (auto-runs on any command)
 uv run irminsul help --json                  # rootless, self-describing contract
 ```

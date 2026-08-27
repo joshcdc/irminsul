@@ -33,9 +33,16 @@ def add_embeddings(conn, chunk_ids, vectors, embed_model: str) -> int:
 
 
 def stale_chunk_ids(conn, embed_model: str) -> list:
-    """Chunk ids missing embeddings or embedded under a different model."""
+    """Chunk ids missing embeddings or embedded under a different model.
+
+    Soft-deleted pages are excluded — embedding a page the owner deleted is
+    wasted spend; search AND this repair verb both ignore deleted content.
+    """
     return [r["id"] for r in conn.execute(
-        "SELECT c.id FROM chunks c LEFT JOIN chunk_embeddings e ON e.chunk_id = c.id"
-        " WHERE e.chunk_id IS NULL OR c.embed_model IS NULL OR c.embed_model != ?",
+        "SELECT c.id FROM chunks c"
+        " JOIN pages p ON p.id = c.page_id"
+        " LEFT JOIN chunk_embeddings e ON e.chunk_id = c.id"
+        " WHERE p.deleted_at IS NULL"
+        " AND (e.chunk_id IS NULL OR c.embed_model IS NULL OR c.embed_model != ?)",
         (embed_model,),
     )]
