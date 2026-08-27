@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from irminsul import chunk as chunking
+from irminsul import db
 from irminsul import io as kbio
 from irminsul import pages
 
@@ -234,3 +235,44 @@ def test_backup_recover(tmp_path):
         _cli(["backup", "--keep", "2", "--json"], home)
     snaps = sorted((home / ".irminsul" / "backups").glob("irminsul-*.db"))
     assert len(snaps) <= 2
+
+
+# ------------------------------------------------------------------ integration: links cleanup on re-put (Phase 3 armor)
+
+def test_reput_cleans_orphaned_link_edges(tmp_path):
+    """links edges are keyed by src_chunk_id; re-chunk mints fresh ids, so old
+    edges must be deleted with the chunks they referenced. No writer populates
+    links yet (Phase 3) — this is armor so the writer can land without orphaning."""
+    store = tmp_path / "links.db"
+    conn = db.connect(store)
+    assert db.load_vec(conn)
+    db.migrate(conn)
+    pid = pages.upsert_page(conn, "projects/net", "body about the network", tags=[])
+    cid = conn.execute("SELECT id FROM chunks WHERE page_id = ?", (pid,)).fetchone()["id"]
+    conn.execute("INSERT INTO links(src_chunk_id, dst_slug) VALUES (?, 'concepts/foo')", (cid,))
+    conn.commit()
+    assert conn.execute("SELECT count(*) FROM links").fetchone()[0] == 1
+    # re-put -> old chunk deleted -> its edge must go with it
+    pages.upsert_page(conn, "projects/net", "edited body entirely different", tags=[])
+    assert conn.execute("SELECT count(*) FROM links").fetchone()[0] == 0
+    conn.close()
+
+
+def test_hard_delete_cleans_incoming_link_edges(tmp_path):
+    """dst-side armor: hard-deleting a page must also drop edges whose
+    dst_slug points at it (incoming links), not just its own outgoing ones."""
+    store = tmp_path / "links2.db"
+    conn = db.connect(store)
+    assert db.load_vec(conn)
+    db.migrate(conn)
+    a_id = pages.upsert_page(conn, "projects/a", "links to b", tags=[])
+    pages.upsert_page(conn, "concepts/b", "the target", tags=[])
+    a_chunk = conn.execute("SELECT id FROM chunks WHERE page_id = ?", (a_id,)).fetchone()["id"]
+    conn.execute("INSERT INTO links(src_chunk_id, dst_slug) VALUES (?, 'concepts/b')", (a_chunk,))
+    conn.commit()
+    assert conn.execute("SELECT count(*) FROM links").fetchone()[0] == 1
+    # hard-delete the TARGET (soft delete + prune at cutoff) -> incoming edge must go
+    pages.soft_delete(conn, "concepts/b")
+    pages.prune(conn, 0)
+    assert conn.execute("SELECT count(*) FROM links").fetchone()[0] == 0
+    conn.close()

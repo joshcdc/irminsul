@@ -105,10 +105,12 @@ def _delete_chunks(conn, page_id) -> None:
     marks = ",".join("?" * len(ids))
     # vec0 has no UPDATE; stale recompute is delete+insert (Phase 2).
     conn.execute(f"DELETE FROM chunk_embeddings WHERE chunk_id IN ({marks})", ids)
-    # chunks_fts is deliberately NOT touched in Phase 1: it is an FTS5
-    # external-content table whose index is empty until Phase 2 adds the
-    # triggers + rebuild. DELETE against unindexed rowids raises
-    # "database disk image is malformed".
+    # links edges are derived from content (src chunk → dst slug) — re-chunk
+    # mints fresh chunk ids, so old src_chunk_id edges would orphan. Clean them
+    # with the chunks they referenced (Phase 3 writer expects this to already hold).
+    conn.execute(f"DELETE FROM links WHERE src_chunk_id IN ({marks})", ids)
+    # chunks_fts is kept in sync by the v2 triggers (chunks_ad handles DELETE) —
+    # no direct FTS writes needed here.
     conn.execute(f"DELETE FROM chunks WHERE id IN ({marks})", ids)
 
 
@@ -171,11 +173,17 @@ def _hard_delete(conn, page_id) -> None:
     if ids:
         marks = ",".join("?" * len(ids))
         conn.execute(f"DELETE FROM chunk_embeddings WHERE chunk_id IN ({marks})", ids)
-        # chunks_fts untouched in Phase 1 (see _delete_chunks).
+        # FTS stays in sync via the chunks_ad trigger.
         conn.execute(f"DELETE FROM chunks WHERE id IN ({marks})", ids)
     conn.execute("DELETE FROM tags WHERE page_id = ?", (page_id,))
+    # outgoing edges (chunks of this page) — re-put armor covers the same on _delete_chunks
     conn.execute("DELETE FROM links WHERE src_chunk_id IN"
                  " (SELECT id FROM chunks WHERE page_id = ?)", (page_id,))
+    # incoming edges (other chunks linking TO this page's slug) — a dead target
+    # must not leave dangling dst-side rows. Slug read before the page row dies.
+    slug = conn.execute("SELECT slug FROM pages WHERE id = ?", (page_id,)).fetchone()
+    if slug:
+        conn.execute("DELETE FROM links WHERE dst_slug = ?", (slug["slug"],))
     conn.execute("DELETE FROM pages WHERE id = ?", (page_id,))
 
 
