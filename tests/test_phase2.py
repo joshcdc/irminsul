@@ -123,3 +123,97 @@ def test_fake_embedder_deterministic_dims():
     assert abs(sum(x * x for x in a[0]) - 1.0) < 1e-6  # L2-normalized
     scores = fake.rerank("hello", ["hello", "zzzz thing wholly unrelated"])
     assert scores[0] > scores[1]  # identical text scores highest (cos=1)
+
+
+def test_voyage_rerank_uses_configured_model(monkeypatch):
+    import httpx
+
+    monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
+    captured = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": [{"index": 0, "relevance_score": 0.9}]}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        return FakeResp()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    v = embed.get_embedder("voyage", dim=8, rerank_model="rerank-2.5-test")
+    scores = v.rerank("q", ["doc"])
+    assert captured["json"]["model"] == "rerank-2.5-test"  # knob, not hardcode
+    assert scores == [0.9]
+
+
+# ------------------------------------------------------------------ CLI: migrate / doctor --fix
+
+def _cli(args, home, input=None):
+    env = dict(os.environ)
+    env["HOME"] = str(home)
+    env["USERPROFILE"] = str(home)
+    return subprocess.run(
+        [sys.executable, "-m", "irminsul", *args],
+        capture_output=True, text=True, env=env, input=input, cwd=str(ROOT),
+    )
+
+
+def _home_with_v1_store(tmp_path):
+    """init (writes config + v2 store), then replace the file with a v1 store."""
+    home = tmp_path / "h"
+    root = tmp_path / "vault"
+    r = _cli(["init", "--dir", str(root), "--json"], home)
+    assert r.returncode == 0, r.stderr
+    dbp = home / ".irminsul" / "irminsul.db"
+    dbp.unlink()
+    conn = sqlite3.connect(dbp)
+    assert db.load_vec(conn)
+    conn.executescript(SCHEMA_V1)
+    conn.commit()
+    conn.close()
+    return home, dbp
+
+
+def test_migrate_command_upgrades_and_idempotent(tmp_path):
+    home, dbp = _home_with_v1_store(tmp_path)
+    r = _cli(["migrate", "--json"], home)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["from"] == 1 and out["to"] == 2 and out["upgraded"] is True
+    # idempotent: no-op on an already-current store
+    r2 = _cli(["migrate", "--json"], home)
+    assert r2.returncode == 0, r2.stderr
+    out2 = json.loads(r2.stdout)
+    assert out2["from"] == 2 and out2["to"] == 2 and out2["upgraded"] is False
+    conn = db.connect(dbp)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    conn.close()
+
+
+def test_doctor_reports_stale_then_fix_heals(tmp_path):
+    home, dbp = _home_with_v1_store(tmp_path)
+    # report-only: stale schema flagged with a remedy, file left untouched
+    r = _cli(["doctor", "--json"], home)
+    assert r.returncode == 1  # fail-closed
+    out = json.loads(r.stdout)
+    assert out["ok"] is False
+    assert out["checks"]["schema_version"] == 1 and out["checks"]["schema_ok"] is False
+    assert "remedy" in out and "migrate" in out["remedy"]
+    conn = db.connect(dbp)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1  # untouched
+    conn.close()
+    # --fix migrates then re-checks green
+    r2 = _cli(["doctor", "--fix", "--json"], home)
+    assert r2.returncode == 0, r2.stderr
+    out2 = json.loads(r2.stdout)
+    assert out2["ok"] is True and out2["migrated"] is True
+    assert out2["checks"]["schema_version"] == 2 and out2["checks"]["schema_ok"] is True
+    assert "remedy" not in out2
+    # second --fix is a no-op
+    r3 = _cli(["doctor", "--fix", "--json"], home)
+    out3 = json.loads(r3.stdout)
+    assert out3["ok"] is True and out3["migrated"] is False

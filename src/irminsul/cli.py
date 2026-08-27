@@ -145,15 +145,20 @@ def init(
 # ---------------------------------------------------------------- command: doctor
 
 @app.command()
-def doctor(as_json: bool = typer.Option(False, "--json")):
+def doctor(
+    fix: bool = typer.Option(False, "--fix", help="run db.migrate first — self-heal a stale schema"),
+    as_json: bool = typer.Option(False, "--json"),
+):
     """Health check: structural integrity (config, schema v, fts5/vec0, dup
-    slugs). stale_embeds/stale_fts are informational readiness counts."""
+    slugs). stale_embeds/stale_fts are informational readiness counts. Reads
+    only unless --fix, which migrates a stale store before checking."""
     cpath = cfg.config_path()
     if not cpath.exists():
         emit({"ok": False, "checks": {"config": False}, "error": f"no config at {cpath}"}, as_json)
         raise SystemExit(EXIT_USER)
 
     checks = {"config": True}
+    migrated = False
     repo = cfg.expand(cfg.resolve("repo.path"))
     db_path = cfg.expand(cfg.resolve("db.path"))
     checks["repo_path_exists"] = Path(repo).exists() if repo else False
@@ -163,6 +168,10 @@ def doctor(as_json: bool = typer.Option(False, "--json")):
         try:
             conn = db.connect(db_path)
             checks["vec0_loaded"] = db.load_vec(conn)
+            if fix:
+                # vec0 must be loaded before migrate (v2 deltas DROP/CREATE vec0).
+                before = conn.execute("PRAGMA user_version").fetchone()[0]
+                migrated = db.migrate(conn) != before
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             checks["schema_version"] = version
             checks["schema_ok"] = version == db.SCHEMA_VERSION
@@ -201,9 +210,40 @@ def doctor(as_json: bool = typer.Option(False, "--json")):
         # is incomplete, not broken; agents read the counts to decide whether
         # retrieval is safe. Fail closed on corruption, not on pipeline lag.
     )
-    emit({"ok": ok, "checks": checks}, as_json)
+    extra = {}
+    if fix:
+        extra["migrated"] = migrated
+    if not checks.get("schema_ok"):
+        extra["remedy"] = "schema stale — run `irminsul migrate` (or `irminsul doctor --fix`)"
+    emit({"ok": ok, "checks": checks, **extra}, as_json)
     if not ok:
         raise SystemExit(EXIT_USER)
+
+
+# ---------------------------------------------------------------- command: migrate
+
+@app.command()
+def migrate(as_json: bool = typer.Option(False, "--json")):
+    """Upgrade the store schema to the current version. Idempotent: no-op on a
+    store that is already current. Auto-runs on every other store command, so
+    this is the explicit one-shot (e.g. after `recover` restores an old file)."""
+    cpath = cfg.config_path()
+    if not cpath.exists():
+        raise UsageError(f"no config at {cpath} — run `irminsul init --dir <root>` first")
+    db_path = cfg.expand(cfg.resolve("db.path"))
+    if not Path(db_path).exists():
+        raise UsageError(f"no store at {db_path} — run `irminsul init --dir <root>` first")
+    conn = db.connect(db_path)
+    try:
+        if not db.load_vec(conn):
+            raise UsageError("sqlite-vec failed to load — cannot migrate vec0 tables")
+        # vec0 loaded BEFORE migrate: v2 deltas DROP/CREATE vec0 tables.
+        before = conn.execute("PRAGMA user_version").fetchone()[0]
+        after = db.migrate(conn)
+    finally:
+        conn.close()
+    emit({"ok": True, "from": before, "to": after,
+          "upgraded": before != after, "schema_version": after}, as_json)
 
 
 # ---------------------------------------------------------------- command: put/get/list/stats
@@ -541,14 +581,19 @@ def _specs() -> dict:
                  "output": {"ok": True, "repo_path": "str", "db_path": "str", "schema_version": 2,
                             "config": "path", "dirs_created": ["str"], "git": "str"},
                  "exit_codes": codes, "status": "implemented", "rootless": False},
-        "doctor": {"args": ["--json"],
+        "doctor": {"args": ["--fix", "--json"],
                    "output": {"ok": "bool", "checks": {"config": "bool", "repo_path_exists": "bool",
                                                        "db_path_exists": "bool", "vec0_loaded": "bool",
                                                        "schema_version": "int", "schema_ok": "bool",
                                                        "fts5": "bool", "vec0_table": "bool",
                                                        "dup_slugs": "int", "stale_embeds": "int",
-                                                       "stale_fts": "int"}},
+                                                       "stale_fts": "int"},
+                              "migrated": "bool (--fix only)", "remedy": "str (when schema stale)"},
                    "exit_codes": codes, "status": "implemented", "rootless": False},
+        "migrate": {"args": ["--json"],
+                    "output": {"ok": True, "from": "int", "to": "int", "upgraded": "bool",
+                               "schema_version": "int"},
+                    "exit_codes": codes, "status": "implemented", "rootless": False},
         "put": {"args": ["<slug>", "--file PATH | stdin", "--json"],
                 "output": {"ok": True, "slug": "str", "page_id": "int", "changed": "created|updated",
                            "chunks": "int", "type": "str", "title": "str|None",
