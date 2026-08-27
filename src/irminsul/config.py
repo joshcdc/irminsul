@@ -15,11 +15,17 @@ from pathlib import Path
 
 APP_DIR_NAME = ".irminsul"
 
-# Dev-only .env injection: load KEY=VALUE pairs from <repo>/.env into the env
+# Dev-only .env injection: load KEY=VALUE pairs from an .env into the env
 # plane BEFORE any resolve() call. Never overrides an already-set var (shell /
 # CI wins). Keep deps thin: tiny parser, no python-dotenv dependency.
+# Path: explicit `path` arg > IRMINSUL_ENV_FILE env var > <cwd>/.env.
+# IRMINSUL_ENV_FILE must be set in the shell/parent env — it can't come from
+# the .env itself (chicken-and-egg).
 def load_dotenv(path: str | None = None) -> bool:
-    p = Path(path) if path else Path.cwd() / ".env"
+    if path is None:
+        env_file = os.environ.get("IRMINSUL_ENV_FILE")
+        path = env_file if env_file else Path.cwd() / ".env"
+    p = Path(path)
     if not p.exists():
         return False
     for line in p.read_text(encoding="utf-8").splitlines():

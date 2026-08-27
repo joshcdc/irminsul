@@ -36,9 +36,11 @@ class Embedder(Protocol):
 
 class VoyageEmbedder:
     def __init__(self, model: str = "voyage-4-large", dim: int = 1024,
+                 rerank_model: str = "rerank-2.5",
                  api_base: str = "https://api.voyageai.com"):
         self.model = model
         self.dim = dim
+        self.rerank_model = rerank_model
         self.api_base = api_base.rstrip("/")
         self._key = os.environ.get("VOYAGE_API_KEY", "")
         if not self._key:
@@ -74,7 +76,7 @@ class VoyageEmbedder:
         r = httpx.post(
             f"{self.api_base}/v1/rerank",
             headers={"Authorization": f"Bearer {self._key}"},
-            json={"model": "rerank-2.5", "query": query, "documents": documents},
+            json={"model": self.rerank_model, "query": query, "documents": documents},
             timeout=60.0,
         )
         r.raise_for_status()
@@ -109,9 +111,13 @@ class FakeEmbedder:
 
 
 def get_embedder(provider: str, model: str = "voyage-4-large", dim: int = 1024,
+                 rerank_model: str = "rerank-2.5",
                  api_base: str = "https://api.voyageai.com") -> Embedder:
+    """Provider seam. rerank_model is a knob (config `search.reranker.model`),
+    not a code path — same story as model/dim."""
     if provider == "voyage":
-        return VoyageEmbedder(model=model, dim=dim, api_base=api_base)
+        return VoyageEmbedder(model=model, dim=dim, rerank_model=rerank_model,
+                              api_base=api_base)
     if provider == "fake":
         return FakeEmbedder(dim=dim)
     raise ValueError(f"embed.provider {provider!r} unknown — use voyage | fake")
