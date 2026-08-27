@@ -315,13 +315,17 @@ def put(
         )
         row = pages.get_page(conn, slug, include_deleted=True)
         n_chunks = conn.execute("SELECT count(*) FROM chunks WHERE page_id = ?", (page_id,)).fetchone()[0]
-    emit({
+    out = {
         "ok": True, "slug": slug, "page_id": page_id,
         "changed": "updated" if existed else "created",
         "chunks": n_chunks,
         "type": row["type"], "title": row["title"],
         "created": row["created"], "updated": row["updated"],
-    }, as_json)
+    }
+    dropped = sorted(set(meta) - kbio.FRONTMATTER_KEYS)
+    if dropped:
+        out["dropped_keys"] = dropped  # report-only, never stored
+    emit(out, as_json)
 
 
 @app.command()
@@ -635,7 +639,8 @@ def _specs() -> dict:
         "put": {"args": ["<slug>", "--file PATH | stdin", "--json"],
                 "output": {"ok": True, "slug": "str", "page_id": "int", "changed": "created|updated",
                            "chunks": "int", "type": "str", "title": "str|None",
-                           "created": "str", "updated": "str"},
+                           "created": "str", "updated": "str",
+                           "dropped_keys": "[str] (only when non-empty; report-only)"},
                 "exit_codes": codes, "status": "implemented", "rootless": False},
         "get": {"args": ["<slug>", "--json"],
                 "output": {"slug": "str", "type": "str", "title": "str", "created": "str",
@@ -666,7 +671,8 @@ def _specs() -> dict:
                     "exit_codes": codes, "status": "implemented", "rootless": False},
         "import": {"args": ["<dir>", "--dry-run", "--json"],
                    "output": {"ok": True, "dry_run": "bool", "imported": "int",
-                              "skipped": "int", "errors": [{"file", "error"}]},
+                              "skipped": "int", "errors": [{"file", "error"}],
+                              "dropped": "[{file, keys}] (only when non-empty; report-only)"},
                    "exit_codes": codes, "status": "implemented", "rootless": False},
         "export": {"args": ["--dir PATH (required)", "--json"],
                    "output": {"ok": True, "exported": "int", "dir": "str"},

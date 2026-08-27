@@ -33,7 +33,7 @@ Machine-readable specs: `irminsul help --json` · `irminsul schema <cmd> --json`
 | `help` | implemented (rootless) | `{contract, version, rootless, exit_codes, commands}` |
 | `schema <cmd>` | implemented (rootless) | one command's spec |
 | `config [key [value]]` | implemented (rootless) | `{key, value, source}` or full dump |
-| `put <slug> [--file]` | implemented | `{ok, slug, page_id, changed: created\|updated, chunks, type, title, created, updated}` |
+| `put <slug> [--file]` | implemented | `{ok, slug, page_id, changed: created\|updated, chunks, type, title, created, updated, dropped_keys?}` — `dropped_keys` report-only when frontmatter carried unmapped keys |
 | `get <slug>` | implemented | `{slug, type, title, created, updated, deleted_at, content}` |
 | `list [--limit N] [--include-deleted]` | implemented | `{items:[{slug, type, title, updated, deleted_at}], count}` |
 | `stats` | implemented | `{ok, pages, active, deleted, chunks, tags}` |
@@ -41,7 +41,7 @@ Machine-readable specs: `irminsul help --json` · `irminsul schema <cmd> --json`
 | `prune --older-than HOURS` | implemented | `{ok, pruned, older_than_hours}` |
 | `backup [--keep N]` | implemented | `{ok, snapshot, size, kept, removed:[str]}` |
 | `recover <ts\|path> --yes` | implemented | `{ok, from, to}` |
-| `import <dir> [--dry-run]` | implemented (idempotent) | `{ok, dry_run, imported, skipped, errors:[{file, error}]}` |
+| `import <dir> [--dry-run]` | implemented (idempotent) | `{ok, dry_run, imported, skipped, errors:[{file, error}], dropped?}` — `dropped` report-only: files whose frontmatter carried unmapped keys |
 | `export --dir PATH` | implemented | `{ok, exported, dir}` |
 | `embed [--stale]` | implemented | `{ok, embedded, stale, provider, model}` — `--stale` = repair/batch/resume (embed only NULL/mismatched tags); bare = embed all |
 | `graph` | planned (Phase 3) | frozen at that phase |

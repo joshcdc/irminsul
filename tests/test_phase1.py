@@ -276,3 +276,26 @@ def test_hard_delete_cleans_incoming_link_edges(tmp_path):
     pages.prune(conn, 0)
     assert conn.execute("SELECT count(*) FROM links").fetchone()[0] == 0
     conn.close()
+
+
+# ------------------------------------------------------------------ frontmatter surfacing (report-only)
+
+def test_put_surfaces_dropped_frontmatter_keys(tmp_path):
+    home, _ = _setup(tmp_path)
+    extra = "---\ntype: note\ntitle: T\naliases: [old, x]\nstatus: draft\ncaptured_at: 2026-01-01\n---\n\nbody\n"
+    out = json.loads(_cli(["put", "concepts/extra", "--json"], home, input=extra).stdout)
+    assert out["dropped_keys"] == ["aliases", "captured_at", "status"]  # type/title consumed
+    # clean frontmatter -> no dropped_keys key at all (additive-optional, no noise)
+    clean = json.loads(_cli(["put", "concepts/clean", "--json"], home,
+                            input="---\ntype: project\ntags:\n  - x\n---\n\nbody\n").stdout)
+    assert "dropped_keys" not in clean
+
+
+def test_import_surfaces_dropped_frontmatter_keys(tmp_path):
+    home, _ = _setup(tmp_path)
+    td = tmp_path / "tree"
+    (td / "concepts").mkdir(parents=True)
+    (td / "concepts" / "a.md").write_text(
+        "---\ntags:\n  - x\naliases: [y]\n---\n\nhello\n", encoding="utf-8")
+    out = json.loads(_cli(["import", str(td), "--json"], home).stdout)
+    assert out["dropped"] == [{"file": "concepts/a.md", "keys": ["aliases"]}]

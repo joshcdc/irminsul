@@ -7,6 +7,11 @@ from pathlib import Path
 
 from . import pages
 
+# Keys upsert_page actually consumes from frontmatter. Anything else the parser
+# collects is REPORT-ONLY (surfaced in put/import output, never stored) — the
+# schema has no drawers for foreign metadata and we don't pretend otherwise.
+FRONTMATTER_KEYS = {"type", "title", "created", "tags"}
+
 
 def parse_frontmatter(text: str):
     """Return (meta dict, body). Frontmatter must start/end on their own `---` line."""
@@ -81,6 +86,7 @@ def import_dir(conn, root, allowed=None, dry_run: bool = False) -> dict:
     files = sorted(p for p in root.rglob("*.md"))
     imported = 0
     errors = []
+    dropped = []
     for p in files:
         rel = p.relative_to(root)
         try:
@@ -94,6 +100,9 @@ def import_dir(conn, root, allowed=None, dry_run: bool = False) -> dict:
             continue
         text = p.read_text(encoding="utf-8")
         meta, body = parse_frontmatter(text)
+        dkeys = sorted(set(meta) - FRONTMATTER_KEYS)
+        if dkeys:
+            dropped.append({"file": rel.as_posix(), "keys": dkeys})
         pages.upsert_page(conn, slug, body, commit=False,
                           type=meta.get("type", "note"),
                           title=meta.get("title"),
@@ -101,7 +110,10 @@ def import_dir(conn, root, allowed=None, dry_run: bool = False) -> dict:
                           tags=meta.get("tags") or [])
         imported += 1
     conn.commit()  # one atomic transaction for the whole batch
-    return {"imported": imported, "skipped": len(errors), "errors": errors}
+    res = {"imported": imported, "skipped": len(errors), "errors": errors}
+    if dropped:
+        res["dropped"] = dropped  # report-only: keys parsed but not consumed
+    return res
 
 
 def export_dir(conn, out_dir: str) -> dict:
