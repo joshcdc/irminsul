@@ -44,7 +44,7 @@ Machine-readable specs: `irminsul help --json` · `irminsul schema <cmd> --json`
 | `import <dir> [--dry-run]` | implemented (idempotent) | `{ok, dry_run, imported, skipped, errors:[{file, error}], dropped?}` — `dropped` report-only: files whose frontmatter carried unmapped keys |
 | `export --dir PATH` | implemented | `{ok, exported, dir}` |
 | `embed [--stale]` | implemented | `{ok, embedded, stale, provider, model}` — `--stale` = repair/batch/resume (embed only NULL/mismatched tags); bare = embed all; soft-deleted pages never embedded |
-| `search "<query>" [--k N]` | implemented | `{ok, query, count, results:[{chunk_id, slug, title, type, score, excerpt}]}` — FTS5 ∪ vec0 KNN → RRF → rerank-2.5; `--k` ≤ 20; soft-deleted excluded; keyword search works without embeddings |
+| `search "<query>" [--k N]` | implemented | `{ok, query, count, leg, results:[{chunk_id, slug, title, type, score, excerpt}], warnings?}` — FTS5 ∪ vec0 KNN → RRF → rerank-2.5; `leg` = hybrid\|keyword\|vector (coverage signal); `warnings` report-only provider/leg failures; `--k` capped 1..20 (config `search.limit` clamped too); soft-deleted excluded; keyword search works without embeddings |
 | `graph` | planned (Phase 3) | frozen at that phase |
 | `rag` | planned (post-v1 Phase 4) | `{answer, citations:[{slug, score}]}` |
 

@@ -276,6 +276,7 @@ def test_search_hybrid_and_excludes_deleted(tmp_path):
     _cli(["put", "concepts/dogs", "--json"], home, input="dogs bark and wag tails in the park", extra_env=env)
     out = json.loads(_cli(["search", "meow cats", "--k", "3", "--json"], home, extra_env=env).stdout)
     assert out["ok"] is True and out["count"] >= 1
+    assert out["leg"] == "hybrid"  # both legs contributed (chunks embedded)
     slugs = {res["slug"] for res in out["results"]}
     assert "concepts/cats" in slugs
     assert all({"slug", "score", "excerpt", "chunk_id"} <= set(res) for res in out["results"])
@@ -293,6 +294,36 @@ def test_search_keyword_only_without_embeddings(tmp_path):
     _cli(["put", "concepts/kw", "--no-embed", "--json"], home, input="needle in the haystack here")
     out = json.loads(_cli(["search", "needle haystack", "--k", "3", "--json"], home).stdout)
     assert out["count"] >= 1 and out["results"][0]["slug"] == "concepts/kw"
+    assert out["leg"] == "keyword"  # coverage-reduced signal, no failure -> no warnings
+    assert "warnings" not in out
+
+
+def test_search_reports_provider_failure_as_warning(tmp_path):
+    # force the embedder to fail at build time -> warning + keyword deg, exit 0
+    env = {"IRMINSUL_EMBED_PROVIDER": "voyage", "VOYAGE_API_KEY": ""}
+    home = tmp_path / "h"
+    root = tmp_path / "vault"
+    assert _cli(["init", "--dir", str(root), "--json"], home, extra_env=env).returncode == 0
+    _cli(["put", "concepts/kw", "--json"], home, input="needle haystack phrase", extra_env=env)
+    out = json.loads(_cli(["search", "needle haystack", "--k", "3", "--json"], home, extra_env=env).stdout)
+    assert out["ok"] is True and out["count"] >= 1          # still works
+    assert out["leg"] == "keyword"                           # degraded, reported
+    assert any(w["leg"] == "embed" for w in out["warnings"])  # displayed, not fixed
+    assert any("VOYAGE_API_KEY" in w["error"] for w in out["warnings"])
+
+
+def test_search_limit_clamped_from_config(tmp_path):
+    env = {"IRMINSUL_EMBED_PROVIDER": "fake"}
+    home = tmp_path / "h"
+    root = tmp_path / "vault"
+    assert _cli(["init", "--dir", str(root), "--json"], home, extra_env=env).returncode == 0
+    # one big page -> ~28 overlapping chunks, every chunk matches "shared"
+    big = ("shared token alpha ref " * 3000) + "\n"
+    _cli(["put", "concepts/big", "--json"], home, input=big, extra_env=env)
+    out = json.loads(_cli(["search", "shared", "--json"], home,
+                          extra_env={**env, "IRMINSUL_SEARCH_LIMIT": "50"}).stdout)
+    assert 1 <= out["count"] <= 20  # config limit 50 clamped to the policy cap, no --k
+    assert out["ok"] is True
 
 
 def test_search_k_cap_enforced(tmp_path):

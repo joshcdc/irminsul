@@ -311,25 +311,34 @@ def embed(
 def search(
     query: str = typer.Argument(..., help="free-text query"),
     k: int = typer.Option(None, "--k", min=1, max=20,
-                          help="result cap (default search.limit)"),
+                          help="result cap (default search.limit; capped 1..20)"),
     as_json: bool = typer.Option(False, "--json"),
 ):
     """Hybrid retrieval: FTS5 keyword ∪ vec0 KNN → RRF → rerank-2.5.
-    Soft-deleted pages excluded. Keyword search works even without embeddings."""
-    limit = k if k is not None else int(cfg.resolve("search.limit"))
+    Soft-deleted pages excluded. Keyword search works even without embeddings.
+    Output `leg` (hybrid|keyword|vector) tells which axes contributed; `warnings`
+    reports provider/leg failures — displayed, never repaired."""
+    limit = max(1, min(k if k is not None else int(cfg.resolve("search.limit")), 20))
+    warnings = []
     try:
         emb = _make_embedder()
-    except Exception:
+    except Exception as e:
         emb = None  # embedding unavailable -> keyword-only (vector leg skipped)
+        warnings.append({"leg": "embed", "error": f"{type(e).__name__}: {e}"})
     with _store() as conn:
-        results = kbsearch.hybrid_search(
+        res = kbsearch.hybrid_search(
             conn, emb, query, limit=limit,
             rrf_k=int(cfg.resolve("search.rrf_k")),
             w_fs=float(cfg.resolve("search.w_fs")),
             w_vec=float(cfg.resolve("search.w_vec")),
             rerank=bool(cfg.resolve("search.rerank")),
+            warnings=warnings,
         )
-    emit({"ok": True, "query": query, "count": len(results), "results": results}, as_json)
+    payload = {"ok": True, "query": query, "count": len(res["results"]),
+               "leg": res["leg"], "results": res["results"]}
+    if res["warnings"]:
+        payload["warnings"] = res["warnings"]  # additive, report-only
+    emit(payload, as_json)
 
 
 # ---------------------------------------------------------------- command: put/get/list/stats
@@ -762,8 +771,10 @@ def _specs() -> dict:
                   "exit_codes": codes, "status": "implemented", "rootless": False},
         "search": {"args": ["<query>", "--k N", "--json"],
                    "output": {"ok": True, "query": "str", "count": "int",
+                              "leg": "hybrid|keyword|vector",
                               "results": [{"chunk_id": "int", "slug": "str", "title": "str|None",
-                                           "type": "str", "score": "float", "excerpt": "str"}]},
+                                           "type": "str", "score": "float", "excerpt": "str"}],
+                              "warnings": "[{leg, error}] (only when non-empty; report-only)"},
                    "exit_codes": codes, "status": "implemented", "rootless": False},
         "graph": {"args": ["<slug>", "--depth N"], "status": "planned (Phase 3)", "rootless": False},
         "rag": {"args": ["<question>", "--k N", "--json"], "status": "planned (post-v1 Phase 4)",
