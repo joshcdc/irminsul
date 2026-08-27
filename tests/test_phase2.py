@@ -152,10 +152,12 @@ def test_voyage_rerank_uses_configured_model(monkeypatch):
 
 # ------------------------------------------------------------------ CLI: migrate / doctor --fix
 
-def _cli(args, home, input=None):
+def _cli(args, home, input=None, extra_env=None):
     env = dict(os.environ)
     env["HOME"] = str(home)
     env["USERPROFILE"] = str(home)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, "-m", "irminsul", *args],
         capture_output=True, text=True, env=env, input=input, cwd=str(ROOT),
@@ -217,3 +219,28 @@ def test_doctor_reports_stale_then_fix_heals(tmp_path):
     r3 = _cli(["doctor", "--fix", "--json"], home)
     out3 = json.loads(r3.stdout)
     assert out3["ok"] is True and out3["migrated"] is False
+
+
+def test_embed_stale_heals_and_is_idempotent(tmp_path):
+    env = {"IRMINSUL_EMBED_PROVIDER": "fake"}  # offline, deterministic vectors
+    home = tmp_path / "h"
+    root = tmp_path / "vault"
+    r = _cli(["init", "--dir", str(root), "--json"], home, extra_env=env)
+    assert r.returncode == 0, r.stderr
+    # put does NOT embed yet (embed-on-write is a separate Phase 2 slice)
+    r = _cli(["put", "projects/foo", "--json"], home, input="cat facts here", extra_env=env)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(_cli(["doctor", "--json"], home, extra_env=env).stdout)["checks"]["stale_embeds"] >= 1
+
+    # repair: embed --stale finds the NULL-tagged chunk and stamps it
+    r = _cli(["embed", "--stale", "--json"], home, extra_env=env)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["ok"] is True and out["stale"] is True and out["embedded"] >= 1
+
+    d = json.loads(_cli(["doctor", "--json"], home, extra_env=env).stdout)
+    assert d["checks"]["stale_embeds"] == 0  # store fully green
+
+    # idempotent: nothing left stale
+    out2 = json.loads(_cli(["embed", "--stale", "--json"], home, extra_env=env).stdout)
+    assert out2["embedded"] == 0

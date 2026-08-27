@@ -43,7 +43,7 @@ Machine-readable specs: `irminsul help --json` · `irminsul schema <cmd> --json`
 | `recover <ts\|path> --yes` | implemented | `{ok, from, to}` |
 | `import <dir> [--dry-run]` | implemented (idempotent) | `{ok, dry_run, imported, skipped, errors:[{file, error}]}` |
 | `export --dir PATH` | implemented | `{ok, exported, dir}` |
-| `embed` | planned (Phase 2) | frozen at that phase |
+| `embed [--stale]` | implemented | `{ok, embedded, stale, provider, model}` — `--stale` = repair/batch/resume (embed only NULL/mismatched tags); bare = embed all |
 | `graph` | planned (Phase 3) | frozen at that phase |
 | `rag` | planned (post-v1 Phase 4) | `{answer, citations:[{slug, score}]}` |
 

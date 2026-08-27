@@ -22,6 +22,8 @@ from . import config as cfg
 from . import db
 from . import io as kbio
 from . import pages
+from . import vectors
+from .embed import get_embedder
 
 app = typer.Typer(no_args_is_help=True, help="irminsul — agent knowledge base (irminsul-io v1).")
 
@@ -244,6 +246,42 @@ def migrate(as_json: bool = typer.Option(False, "--json")):
         conn.close()
     emit({"ok": True, "from": before, "to": after,
           "upgraded": before != after, "schema_version": after}, as_json)
+
+
+# ---------------------------------------------------------------- command: embed
+
+@app.command()
+def embed(
+    stale: bool = typer.Option(
+        False, "--stale",
+        help="embed only rows whose embed_model tag is NULL / missing / ≠ configured model"),
+    as_json: bool = typer.Option(False, "--json"),
+):
+    """Embed chunks via the configured provider (embed.provider). Bare = embed
+    every chunk, ignoring tags. --stale = the repair verb: only chunks whose
+    embed_model tag is NULL / no vector / ≠ configured model (covers crashed
+    batches, --no-embed puts, and model bumps). Idempotent by construction."""
+    with _store() as conn:
+        provider = cfg.resolve("embed.provider")
+        model = cfg.resolve("embed.model")
+        dim = int(cfg.resolve("embed.dim"))
+        rr = cfg.resolve("search.reranker.model")
+        emb = get_embedder(provider, model=model, dim=dim, rerank_model=rr)
+        if stale:
+            ids = vectors.stale_chunk_ids(conn, model)
+        else:
+            ids = [r["id"] for r in conn.execute("SELECT id FROM chunks ORDER BY id")]
+        embedded = 0
+        if ids:
+            texts = [r["chunk_text"] for r in conn.execute(
+                f"SELECT chunk_text FROM chunks WHERE id IN ({','.join('?' * len(ids))})"
+                " ORDER BY id", ids)]
+            vecs = []
+            for i in range(0, len(texts), 64):  # batch network calls
+                vecs.extend(emb.embed(texts[i:i + 64], input_type="document"))
+            embedded = vectors.add_embeddings(conn, ids, vecs, model)
+    emit({"ok": True, "embedded": embedded, "stale": stale,
+          "provider": provider, "model": model}, as_json)
 
 
 # ---------------------------------------------------------------- command: put/get/list/stats
@@ -642,7 +680,10 @@ def _specs() -> dict:
         "config": {"args": ["[key]", "[value]", "--json", "--verbose"],
                    "output": {"key": "str", "value": "scalar", "source": "cli|env|config|default"},
                    "exit_codes": codes, "status": "implemented", "rootless": True},
-        "embed": {"args": ["--stale", "--json"], "status": "planned (Phase 2)", "rootless": False},
+        "embed": {"args": ["--stale", "--json"],
+                  "output": {"ok": True, "embedded": "int", "stale": "bool",
+                             "provider": "str", "model": "str"},
+                  "exit_codes": codes, "status": "implemented", "rootless": False},
         "graph": {"args": ["<slug>", "--depth N"], "status": "planned (Phase 3)", "rootless": False},
         "rag": {"args": ["<question>", "--k N", "--json"], "status": "planned (post-v1 Phase 4)",
                 "rootless": False},
